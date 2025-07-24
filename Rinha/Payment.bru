@@ -1,0 +1,21 @@
+meta {
+  name: Payment
+  type: http
+  seq: 1
+}
+
+post {
+  url: http://localhost:3000/payment
+  body: json
+  auth: inherit
+}
+
+body:json {
+  {
+    teste:"adasda"
+  }
+}
+
+settings {
+  encodeUrl: true
+}

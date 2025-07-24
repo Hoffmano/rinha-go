@@ -1,0 +1,28 @@
+services:
+
+  processor-api: &api
+    build: ./api
+    hostname: processor-api
+    networks:
+      - api
+      - payment-processor
+    ports:
+      - "9999:3000"
+    deploy:
+      resources:
+        limits:
+          cpus: "0.75"
+          memory: "175MB"
+
+  # processor-api-2:
+  #   <<: *api
+  #   hostname: processor-api
+  #   ports:
+  #     - "3002:3000"
+
+networks:
+  api:
+    driver: bridge
+  payment-processor:
+    external: true
+

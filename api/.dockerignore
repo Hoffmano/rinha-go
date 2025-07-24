@@ -1,0 +1,4 @@
+.git
+.gitignore
+*.md
+main # Evita copiar um binário que você compilou localmente
