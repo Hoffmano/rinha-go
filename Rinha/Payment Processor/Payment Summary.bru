@@ -1,0 +1,24 @@
+meta {
+  name: Payment Summary
+  type: http
+  seq: 2
+}
+
+get {
+  url: http://localhost:8001/admin/payments-summary?from=2020-07-10T12:34:56.000Z&to=2029-07-10T12:35:56.000Z
+  body: none
+  auth: inherit
+}
+
+params:query {
+  from: 2020-07-10T12:34:56.000Z
+  to: 2029-07-10T12:35:56.000Z
+}
+
+headers {
+  X-Rinha-Token: 123
+}
+
+settings {
+  encodeUrl: true
+}

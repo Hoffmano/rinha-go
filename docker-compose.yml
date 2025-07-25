@@ -7,7 +7,7 @@ services:
       - api
       - payment-processor
     ports:
-      - "9999:3000"
+      - "9999:9999"
     deploy:
       resources:
         limits:

@@ -1,0 +1,21 @@
+meta {
+  name: Token
+  type: http
+  seq: 3
+}
+
+put {
+  url: http://localhost:8001/admin/configurations/token
+  body: json
+  auth: inherit
+}
+
+body:json {
+  {
+    "token": "123"
+  }
+}
+
+settings {
+  encodeUrl: true
+}

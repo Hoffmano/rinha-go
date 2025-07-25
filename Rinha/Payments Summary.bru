@@ -1,0 +1,20 @@
+meta {
+  name: Payments Summary
+  type: http
+  seq: 3
+}
+
+get {
+  url: http://localhost:9999/payments-summary?from=2020-07-10T12:34:56.000Z&to=2027-07-10T12:34:56Z
+  body: json
+  auth: inherit
+}
+
+params:query {
+  from: 2020-07-10T12:34:56.000Z
+  to: 2027-07-10T12:34:56Z
+}
+
+settings {
+  encodeUrl: true
+}

@@ -1,0 +1,23 @@
+meta {
+  name: Payment
+  type: http
+  seq: 1
+}
+
+post {
+  url: http://localhost:8001/payments
+  body: json
+  auth: inherit
+}
+
+body:json {
+  {
+    "correlationId": "4a7901b8-7d26-4d9d-aa19-4dc1c7cf60b3",
+    "amount": 19.90,
+    "requestedAt" : "2025-07-15T12:34:56.000Z"
+  }
+}
+
+settings {
+  encodeUrl: true
+}
