@@ -25,7 +25,7 @@ services:
 
   api-1: &api
     build: ./api
-    command: go run main.go
+    # command: go run main.go
     hostname: api-1
     ports:
       - "3001:9999"
