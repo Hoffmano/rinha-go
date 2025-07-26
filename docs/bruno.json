@@ -1,6 +1,6 @@
 {
   "version": "1",
-  "name": "Rinha",
+  "name": "rinha-docs",
   "type": "collection",
   "ignore": [
     "node_modules",

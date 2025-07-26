@@ -5,7 +5,7 @@ meta {
 }
 
 post {
-  url: http://localhost:9999/payment
+  url: http://localhost:9999/payments
   body: json
   auth: inherit
 }
@@ -13,12 +13,11 @@ post {
 body:json {
   {
     "correlationId":"{{uuid}}",
-    "ammount": 10.50
+    "amount": 10.50
   }
 }
 
 script:pre-request {
-  // A self-contained function to generate a UUID v4
   function uuidv4() {
     return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
       const r = Math.random() * 16 | 0;
@@ -27,7 +26,6 @@ script:pre-request {
     });
   }
   
-  // Set the generated UUID as a variable named 'uuid'
   bru.setVar('uuid', uuidv4());
 }
 
