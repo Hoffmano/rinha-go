@@ -2,13 +2,13 @@ package main
 
 import (
 	"bytes"
-	"database/sql"
 	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
 	"time"
 
+	"github.com/jmoiron/sqlx"
 	_ "github.com/lib/pq"
 )
 
@@ -20,18 +20,29 @@ const (
 	databaseName = "postgres"
 )
 
-var db *sql.DB
+var db *sqlx.DB
 
 var paymentsQueue = make(chan Payment, 10000)
 
 type Payment struct {
 	CorrelationID string  `json:"correlationId"`
 	Amount        float32 `json:"amount"`
+	Processor     string  `db:"processor"`
+	RequestedAt   string  `json:"requestedAt"`
 }
 
 type PaymentRequest struct {
 	Payment
-	RequestedAt time.Time `json:"requestedAt"`
+}
+
+type PaymentProcessorSummary struct {
+	TotalRequests int16   `json:"totalRequests" db:"total_requests"`
+	TotalAmount   float32 `json:"totalAmount" db:"total_amount"`
+}
+
+type PaymentsSummary struct {
+	Default  PaymentProcessorSummary `json:"default"`
+	Fallback PaymentProcessorSummary `json:"fallback"`
 }
 
 func main() {
@@ -39,7 +50,7 @@ func main() {
 	http.HandleFunc("GET /payments-summary", getPaymentsSummary)
 
 	connectToDatabase()
-	// FIX: I think that I'm processing my payments synchronously, I will need to made this in parallel way
+	// TODO: I think that I'm processing my payments synchronously, I will need to made this in parallel way
 	go paymentWorker()
 
 	log.Println("Server is up.")
@@ -51,7 +62,7 @@ func connectToDatabase() {
 		"password=%s dbname=%s sslmode=disable",
 		host, port, user, password, databaseName)
 	var err error
-	db, err = sql.Open("postgres", psqlInfo)
+	db, err = sqlx.Open("postgres", psqlInfo)
 	if err != nil {
 		panic(err)
 	}
@@ -68,6 +79,13 @@ func connectToDatabase() {
 		)
 	`)
 
+	db.Exec(`
+		alter table payments add column if not exists requested_at timestamp
+	`)
+
+	db.Exec(`
+		alter table payments add column if not exists processor boolean
+	`)
 	fmt.Println("Successfully connected to database!")
 }
 
@@ -79,13 +97,26 @@ func postPayment(w http.ResponseWriter, r *http.Request) {
 
 func paymentWorker() {
 	for payment := range paymentsQueue {
-		var paymentRequest PaymentRequest
-		paymentRequest.RequestedAt = time.Now()
-		paymentRequest.Payment = payment
-		json, _ := json.Marshal(paymentRequest)
+		payment.RequestedAt = time.Now().Format(time.DateTime)
+		// log.Println(payment)
+		json, _ := json.Marshal(payment)
 		body := bytes.NewBuffer(json)
-		response, err := http.Post("http://payment-processor-default:8080/payments", "application/json", body)
-		db.Exec("insert into payments (correlation_id, amount) values ($1, $2)", payment.CorrelationID, payment.Amount)
+		_, err := http.Post("http://payment-processor-default:8080/payments", "application/json", body)
+		if err != nil {
+			log.Println("fallback")
+			log.Println(err)
+			_, err := http.Post("http://payment-processor-fallback:8080/payments", "application/json", body)
+			if err != nil {
+				log.Println("return to queue")
+				log.Println(err)
+				paymentsQueue <- payment
+				db.Exec("insert into payments (correlation_id, amount, processor, requested_at) values ($1, $2, true, $3)", payment.CorrelationID, payment.Amount, payment.RequestedAt)
+				return
+			}
+			return
+		}
+		db.Exec("insert into payments (correlation_id, amount, processor, requested_at) values ($1, $2, false, $3)", payment.CorrelationID, payment.Amount, payment.RequestedAt)
+
 	}
 }
 
@@ -103,4 +134,28 @@ func getPayments(w http.ResponseWriter) {
 }
 
 func getPaymentsSummary(w http.ResponseWriter, r *http.Request) {
+	from := r.URL.Query().Get("from")
+	to := r.URL.Query().Get("to")
+
+	fromTime, _ := time.Parse(time.RFC3339Nano, from)
+	toTime, _ := time.Parse(time.RFC3339Nano, to)
+	// log.Println(from, to, fromTime, toTime)
+
+	var summary PaymentsSummary
+	err := db.Get(&summary.Default, `
+		select 
+			count(*) as total_requests, 
+			coalesce(sum(amount),0) as total_amount 
+		from payments 
+		where 
+			processor = false
+			and requested_at >= $1
+			and requested_at <= $2
+		`, fromTime.Format(time.DateTime), toTime.Format(time.DateTime))
+	if err != nil {
+		log.Println(err)
+	}
+
+	json, _ := json.MarshalIndent(summary, "", "  ")
+	fmt.Fprintf(w, "%s", string(json))
 }
