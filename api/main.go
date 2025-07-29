@@ -60,7 +60,7 @@ func main() {
 	connectToDatabase()
 	// TODO: I think that I'm processing my payments synchronously, I will need to made this in parallel way
 	// go paymentWorker()
-	numWorkers := 10      // Define how many workers you want
+	numWorkers := 5
 	var wg sync.WaitGroup // Use a WaitGroup to wait for all workers to finish
 
 	// Start multiple workers
@@ -79,6 +79,8 @@ func connectToDatabase() {
 		host, port, user, password, databaseName)
 	var err error
 	db, err = sqlx.Open("postgres", psqlInfo)
+	db.SetMaxOpenConns(0)
+	db.SetMaxIdleConns(10)
 	if err != nil {
 		panic(err)
 	}
@@ -129,13 +131,13 @@ func paymentWorker(workerID int, wg *sync.WaitGroup) {
 				log.Println(res.StatusCode)
 				log.Println("return to queue")
 				paymentsQueue <- payment
-				return
+				continue
 			}
 			_, err := db.NamedExec("insert into payments (correlation_id, amount, processor, requested_at) values (:correlation_id, :amount, true, :requested_at)", payment)
 			if err != nil {
 				log.Println(err)
 			}
-			return
+			continue
 		}
 		// log.Println("insert")
 		_, err := db.NamedExec("insert into payments (correlation_id, amount, processor, requested_at) values (:correlation_id, :amount, false, :requested_at)", payment)
