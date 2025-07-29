@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/jmoiron/sqlx"
@@ -25,10 +26,10 @@ var db *sqlx.DB
 var paymentsQueue = make(chan Payment, 10000)
 
 type Payment struct {
-	CorrelationID string  `json:"correlationId"`
-	Amount        float32 `json:"amount"`
-	Processor     string  `db:"processor"`
-	RequestedAt   string  `json:"requestedAt"`
+	CorrelationID string  `json:"correlationId" db:"correlation_id"`
+	Amount        float32 `json:"amount" db:"amount"`
+	Processor     string  `json:"processor" db:"processor"`
+	RequestedAt   string  `json:"requestedAt" db:"requested_at"`
 }
 
 type PaymentRequest struct {
@@ -45,15 +46,30 @@ type PaymentsSummary struct {
 	Fallback PaymentProcessorSummary `json:"fallback"`
 }
 
+type ProcessorRow struct {
+	ProcessorName string  `db:"processor"`
+	TotalRequests int16   `db:"total_requests"`
+	TotalAmount   float32 `db:"total_amount"`
+}
+
 func main() {
+	log.Println("starting")
 	http.HandleFunc("POST /payments", postPayment)
 	http.HandleFunc("GET /payments-summary", getPaymentsSummary)
 
 	connectToDatabase()
 	// TODO: I think that I'm processing my payments synchronously, I will need to made this in parallel way
-	go paymentWorker()
+	// go paymentWorker()
+	numWorkers := 10      // Define how many workers you want
+	var wg sync.WaitGroup // Use a WaitGroup to wait for all workers to finish
 
-	log.Println("Server is up.")
+	// Start multiple workers
+	for i := 1; i <= numWorkers; i++ {
+		wg.Add(1) // Increment the WaitGroup counter for each worker
+		go paymentWorker(i, &wg)
+	}
+
+	log.Println("Server is up.1")
 	http.ListenAndServe(":9999", nil)
 }
 
@@ -95,43 +111,52 @@ func postPayment(w http.ResponseWriter, r *http.Request) {
 	paymentsQueue <- payment
 }
 
-func paymentWorker() {
+func paymentWorker(workerID int, wg *sync.WaitGroup) {
+	defer wg.Done()
+	log.Printf("Worker %d started.", workerID)
 	for payment := range paymentsQueue {
-		payment.RequestedAt = time.Now().Format(time.DateTime)
+		payment.RequestedAt = time.Now().Format(time.RFC3339)
 		// log.Println(payment)
 		json, _ := json.Marshal(payment)
 		body := bytes.NewBuffer(json)
-		_, err := http.Post("http://payment-processor-default:8080/payments", "application/json", body)
-		if err != nil {
+		res, _ := http.Post("http://payment-processor-default:8080/payments", "application/json", body)
+		// log.Println(res.StatusCode)
+		if res.StatusCode != http.StatusOK {
+			log.Println(res.StatusCode)
 			log.Println("fallback")
-			log.Println(err)
-			_, err := http.Post("http://payment-processor-fallback:8080/payments", "application/json", body)
-			if err != nil {
+			res, _ := http.Post("http://payment-processor-fallback:8080/payments", "application/json", bytes.NewBuffer(json))
+			if res.StatusCode != http.StatusOK {
+				log.Println(res.StatusCode)
 				log.Println("return to queue")
-				log.Println(err)
 				paymentsQueue <- payment
-				db.Exec("insert into payments (correlation_id, amount, processor, requested_at) values ($1, $2, true, $3)", payment.CorrelationID, payment.Amount, payment.RequestedAt)
 				return
+			}
+			_, err := db.NamedExec("insert into payments (correlation_id, amount, processor, requested_at) values (:correlation_id, :amount, true, :requested_at)", payment)
+			if err != nil {
+				log.Println(err)
 			}
 			return
 		}
-		db.Exec("insert into payments (correlation_id, amount, processor, requested_at) values ($1, $2, false, $3)", payment.CorrelationID, payment.Amount, payment.RequestedAt)
-
+		// log.Println("insert")
+		_, err := db.NamedExec("insert into payments (correlation_id, amount, processor, requested_at) values (:correlation_id, :amount, false, :requested_at)", payment)
+		if err != nil {
+			log.Println(err)
+		}
 	}
 }
 
-func getPayments(w http.ResponseWriter) {
-	payments, _ := db.Query("select * from payments")
-
-	var selectedPayments []Payment
-	for payments.Next() {
-		var payment Payment
-		payments.Scan(&payment.CorrelationID, &payment.Amount)
-		selectedPayments = append(selectedPayments, payment)
-	}
-	json, _ := json.MarshalIndent(selectedPayments, "", "  ")
-	fmt.Fprintf(w, "%s", string(json))
-}
+// func getPayments(w http.ResponseWriter, r *http.Request) {
+// 	payments, _ := db.Query("select * from payments")
+//
+// 	var selectedPayments []Payment
+// 	for payments.Next() {
+// 		var payment Payment
+// 		payments.Scan(&payment.CorrelationID, &payment.Amount)
+// 		selectedPayments = append(selectedPayments, payment)
+// 	}
+// 	json, _ := json.MarshalIndent(selectedPayments, "", "  ")
+// 	fmt.Fprintf(w, "%s", string(json))
+// }
 
 func getPaymentsSummary(w http.ResponseWriter, r *http.Request) {
 	from := r.URL.Query().Get("from")
@@ -142,18 +167,33 @@ func getPaymentsSummary(w http.ResponseWriter, r *http.Request) {
 	// log.Println(from, to, fromTime, toTime)
 
 	var summary PaymentsSummary
-	err := db.Get(&summary.Default, `
+	var processorRows []ProcessorRow
+	err := db.Select(&processorRows, `
 		select 
+			processor,
 			count(*) as total_requests, 
 			coalesce(sum(amount),0) as total_amount 
 		from payments 
 		where 
-			processor = false
-			and requested_at >= $1
+			requested_at >= $1
 			and requested_at <= $2
+		group by processor
 		`, fromTime.Format(time.DateTime), toTime.Format(time.DateTime))
 	if err != nil {
 		log.Println(err)
+	}
+
+	for _, row := range processorRows {
+		switch row.ProcessorName {
+		case "false":
+			summary.Default.TotalRequests = row.TotalRequests
+			summary.Default.TotalAmount = row.TotalAmount
+		case "true":
+			summary.Fallback.TotalRequests = row.TotalRequests
+			summary.Fallback.TotalAmount = row.TotalAmount
+		default:
+			log.Printf("Warning: Unknown processor type '%s' encountered in database results. Skipping.", row.ProcessorName)
+		}
 	}
 
 	json, _ := json.MarshalIndent(summary, "", "  ")
